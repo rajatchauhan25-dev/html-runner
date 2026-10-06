@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>HTML Runner</title>
+<style>
+:root{--bg:#eef2f7;--card:#fff;--ink:#14213d;--mute:#5b6779;--line:#d5dce6;--acc:#f4a300;--accInk:#14213d;--danger:#c0392b}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1624;--card:#18223a;--ink:#eaf0fa;--mute:#9aa7bd;--line:#2a3652;--accInk:#14213d}}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--ink);font:16px/1.5 -apple-system,"SF Pro Text",system-ui,sans-serif;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+main{max-width:760px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:26px;margin:8px 0 4px;letter-spacing:-.3px}
+p.sub{margin:0 0 18px;color:var(--mute)}
+.drop{display:block;border:2px dashed var(--ink);border-radius:14px;padding:28px 16px;text-align:center;cursor:pointer;background:var(--card)}
+.drop b{display:block;font-size:19px}
+.drop span{color:var(--mute);font-size:14px}
+.drop input{display:none}
+button{font:inherit;cursor:pointer;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:10px 14px;min-height:44px}
+button.pri{background:var(--acc);color:var(--accInk);border-color:var(--acc);font-weight:700}
+button.del{color:var(--danger)}
+h2{font-size:17px;margin:26px 0 8px}
+.item{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:8px}
+.item .name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.item small{display:block;color:var(--mute)}
+textarea{width:100%;min-height:140px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:12px;font:14px/1.4 ui-monospace,Menlo,monospace}
+.row{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+.empty{color:var(--mute);padding:6px 2px}
+#msg{margin-top:12px;color:var(--danger);min-height:20px;font-size:14px}
+/* runner */
+#runner{position:fixed;inset:0;background:#fff;display:none;z-index:10}
+#runner iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff}
+#bar{position:fixed;top:calc(env(safe-area-inset-top) + 8px);right:8px;z-index:11;display:none;gap:6px;opacity:.92}
+#bar button{box-shadow:0 2px 8px rgba(0,0,0,.25);padding:8px 12px;min-height:40px}
+#bar.min button:not(#tgl){display:none}
+</style>
+</head>
+<body>
+<main id="home">
+  <h1>HTML Runner</h1>
+  <p class="sub">iPad pe HTML file chalane ke liye. File chuno, seedha chalegi.</p>
+
+  <label class="drop">
+    <b>HTML file chuno</b>
+    <span>Files app se .html / .htm (ek ya zyada)</span>
+    <input id="pick" type="file" accept=".html,.htm,text/html" multiple>
+  </label>
+
+  <h2>Ya code paste karo</h2>
+  <textarea id="code" placeholder="<!DOCTYPE html> ... yahan paste karo"></textarea>
+  <div class="row">
+    <button class="pri" id="runCode">Run</button>
+    <button id="saveCode">Save karo</button>
+  </div>
+  <div id="msg"></div>
+
+  <h2>Saved files</h2>
+  <div id="list"></div>
+</main>
+
+<div id="runner"><iframe id="frame" allow="fullscreen; clipboard-write" sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock"></iframe></div>
+<div id="bar">
+  <button id="back" class="pri">Back</button>
+  <button id="reload">Reload</button>
+  <button id="newtab">New tab</button>
+  <button id="tgl">Hide</button>
+</div>
+
+<script>
+(function(){
+  var $=function(i){return document.getElementById(i)};
+  var db=null, memStore={}, current=null;
+
+  // ---- storage (IndexedDB, falls back to memory) ----
+  function openDB(cb){
+    try{
+      var r=indexedDB.open('html-runner',1);
+      r.onupgradeneeded=function(){r.result.createObjectStore('files',{keyPath:'id'})};
+      r.onsuccess=function(){db=r.result;cb()};
+      r.onerror=function(){cb()};
+    }catch(e){cb()}
+  }
+  function putFile(f,cb){
+    if(!db){memStore[f.id]=f;return cb&&cb()}
+    try{var t=db.transaction('files','readwrite');t.objectStore('files').put(f);t.oncomplete=function(){cb&&cb()}}catch(e){memStore[f.id]=f;cb&&cb()}
+  }
+  function allFiles(cb){
+    if(!db){return cb(Object.keys(memStore).map(function(k){return memStore[k]}))}
+    try{var q=db.transaction('files').objectStore('files').getAll();q.onsuccess=function(){cb(q.result)};q.onerror=function(){cb([])}}catch(e){cb([])}
+  }
+  function delFile(id,cb){
+    if(!db){delete memStore[id];return cb()}
+    try{var t=db.transaction('files','readwrite');t.objectStore('files').delete(id);t.oncomplete=cb}catch(e){cb()}
+  }
+
+  // ---- list ----
+  function esc(s){return s.replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+  function render(){
+    allFiles(function(files){
+      files.sort(function(a,b){return b.time-a.time});
+      var L=$('list');
+      if(!files.length){L.innerHTML='<div class="empty">Abhi koi file saved nahi hai.</div>';return}
+      L.innerHTML='';
+      files.forEach(function(f){
+        var d=document.createElement('div');d.className='item';
+        d.innerHTML='<div class="name">'+esc(f.name)+'<small>'+Math.max(1,Math.round(f.html.length/1024))+' KB</small></div>'
+          +'<button class="pri">Open</button><button class="del">Delete</button>';
+        d.children[1].onclick=function(){run(f.html,f.name)};
+        d.children[2].onclick=function(){delFile(f.id,render)};
+        L.appendChild(d);
+      });
+    });
+  }
+
+  // ---- run ----
+  function run(html,name){
+    current={html:html,name:name};
+    $('frame').srcdoc=html;
+    $('home').style.display='none';
+    $('runner').style.display='block';
+    $('bar').style.display='flex';
+    document.title=name||'HTML Runner';
+  }
+  function stop(){
+    $('frame').srcdoc='';
+    $('runner').style.display='none';
+    $('bar').style.display='none';
+    $('home').style.display='block';
+    document.title='HTML Runner';
+  }
+  $('back').onclick=stop;
+  $('reload').onclick=function(){if(current){$('frame').srcdoc='';setTimeout(function(){$('frame').srcdoc=current.html},30)}};
+  $('newtab').onclick=function(){
+    if(!current)return;
+    var u=URL.createObjectURL(new Blob([current.html],{type:'text/html'}));
+    var w=window.open(u,'_blank');
+    if(!w){location.href=u}
+  };
+  $('tgl').onclick=function(){var b=$('bar');b.classList.toggle('min');$('tgl').textContent=b.classList.contains('min')?'Menu':'Hide'};
+
+  // ---- file pick ----
+  $('pick').onchange=function(e){
+    var files=Array.prototype.slice.call(e.target.files);
+    if(!files.length)return;
+    var left=files.length,last=null;
+    files.forEach(function(f){
+      var r=new FileReader();
+      r.onload=function(){
+        var rec={id:f.name+'|'+f.size,name:f.name,html:r.result,time:Date.now()};
+        last=rec;
+        putFile(rec,function(){
+          if(--left===0){e.target.value='';render();if(files.length===1)run(rec.html,rec.name)}
+        });
+      };
+      r.onerror=function(){$('msg').textContent='File padh nahi paye: '+f.name;left--};
+      r.readAsText(f);
+    });
+  };
+
+  // ---- paste ----
+  $('runCode').onclick=function(){
+    var v=$('code').value.trim();
+    if(!v){$('msg').textContent='Pehle code paste karo.';return}
+    $('msg').textContent='';run(v,'Pasted code');
+  };
+  $('saveCode').onclick=function(){
+    var v=$('code').value.trim();
+    if(!v){$('msg').textContent='Pehle code paste karo.';return}
+    var m=v.match(/<title>([^<]*)<\/title>/i);
+    var n=(m&&m[1].trim()||'Pasted '+new Date().toLocaleTimeString())+'.html';
+    putFile({id:'paste|'+Date.now(),name:n,html:v,time:Date.now()},function(){$('msg').textContent='';render()});
+  };
+
+  openDB(render);
+})();
+</script>
+</body>
+</html>
